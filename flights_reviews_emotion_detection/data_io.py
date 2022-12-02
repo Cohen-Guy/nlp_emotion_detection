@@ -11,7 +11,7 @@ class DataIO(object):
 
     def read_data(self):
         if self.debug_mode:
-            df = pd.read_csv(self.csv_data_file_path)
+            df = pd.read_csv(self.csv_data_file_path, header=1)
         else:
             wb = load_workbook(filename=self.excel_data_file_path)
             ws = wb.active
