@@ -61,15 +61,50 @@ class FlightsReviewsEmotionDetection:
     def extract_src_and_dst(self, df):
         for index, row in df.iterrows():
             route = row['route']
-            re_result = re.search('(.*?) to (.*)?( via )(.*)', route)
-            df.loc[index, 'source'] = re_result.group(1)
-            df.loc[index, 'dst'] = re_result.group(2)
-            df.loc[index, 'connection'] = re_result.group(3)
+            re_result = re.search('(.*?) to (.*?) (via (.*))|(.*?) to (.*)', route)
+            try:
+                groups = re_result.groups()
+                if groups[0] is not None:
+                    df.loc[index, 'src'] = groups[0]
+                    df.loc[index, 'dst'] = groups[1]
+                    df.loc[index, 'via'] = groups[3]
+                else:
+                    df.loc[index, 'src'] = groups[4]
+                    df.loc[index, 'dst'] = groups[5]
+            except:
+                pass
+
+
+    def determine_verified(self, group_0):
+        if group_0 is None:
+            return None
+        elif 'Verified Review' in group_0 or 'Trip Verified' in group_0:
+            return True
+        elif 'Not Verified' in group_0:
+            return False
+        else:
+            return None
+    def process_review(self, df):
+        for index, row in df.iterrows():
+            customer_review = row['customer_review']
+            re_result = re.search('((âœ…)? Verified Review \||(âœ…)? Trip Verified \||(âœ…)?Not Verified \|)?(.*)', customer_review)
+            try:
+                self.determine_verified(re_result.groups()[0])
+            except:
+                pass
+            df.loc[index, 'verified'] = self.determine_verified(re_result.groups()[0])
+            df.loc[index, 'review_text'] = re_result.groups()[len(re_result.groups())-1]
+
     def feature_engineering(self, df):
         df['review_date'] = df['review_date'].apply(self.convert_date)
+        df['date_flown'] = df['date_flown'].apply(self.convert_date)
+        df['year_flown'] = df['date_flown'].dt.year
+        df['month_flown'] = df['date_flown'].dt.month
         self.extract_aircrafts(df)
         self.extract_src_and_dst(df)
-        pass
+        self.process_review(df)
+        df = df.drop(['review_date', 'date_flown', 'aircraft', 'route', 'customer_review'], axis=1)
+        return df
 
     def preprocessing(self, df):
         df = self.feature_selection(df)
