@@ -54,7 +54,7 @@ flags.DEFINE_string("output", "results.json", "Output json file.")
 flags.DEFINE_string("emotion_file", "data/emotions.txt",
                     "File containing list of emotions.")
 
-flags.DEFINE_boolean("add_neutral", True, "Whether to add neutral as emotion.")
+flags.DEFINE_boolean("add_neutral", False, "Whether to add neutral as emotion.")
 
 flags.DEFINE_float("threshold", 0.3, "Threshold for binarizing predictions.")
 

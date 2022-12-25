@@ -54,29 +54,31 @@ import pandas as pd
 import tensorflow as tf
 from tensorflow import estimator as tf_estimator
 
+from goemotions.best_checkpoint_copier import BestCheckpointCopier
+
 flags = tf.flags
 
 FLAGS = flags.FLAGS
 
 ## Required parameters
-flags.DEFINE_string("emotion_file", "goemotions/data/emotions.txt",
+flags.DEFINE_string("emotion_file", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'data', 'emotions.txt'),
                     "File containing a list of emotions.")
 
 flags.DEFINE_string(
-    "data_dir", "goemotions/data",
+    "data_dir", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'data'),
     "The input data dir. Should contain the .tsv files (or other data files) "
     "for the task.")
 
 flags.DEFINE_string(
-    "bert_config_file", None,
+    "bert_config_file", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'bert', 'bert_config.json'),
     "The config json file corresponding to the pre-trained BERT model. "
     "This specifies the model architecture.")
 
-flags.DEFINE_string("vocab_file", None,
+flags.DEFINE_string("vocab_file", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'bert', 'vocab.txt'),
                     "The vocabulary file that the BERT model was trained on.")
 
 flags.DEFINE_string(
-    "output_dir", None,
+    "output_dir", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'output'),
     "The output directory where the model checkpoints will be written.")
 
 flags.DEFINE_string("test_fname", "test.tsv", "The name of the test file.")
@@ -90,21 +92,21 @@ flags.DEFINE_boolean("multilabel", False,
 ## Other parameters
 
 flags.DEFINE_string(
-    "init_checkpoint", None,
+    "init_checkpoint", None,#os.path.join(os.path.dirname(__file__), 'output', 'model.ckpt-500'),
     "Initial checkpoint (usually from a pre-trained BERT model).")
 
 flags.DEFINE_bool(
-    "do_lower_case", False,
+    "do_lower_case", True,
     "Whether to lower case the input text. Should be True for uncased "
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 50,
+    "max_seq_length", 500,
     "The maximum total input sequence length after WordPiece tokenization. "
     "Sequences longer than this will be truncated, and sequences shorter "
     "than this will be padded.")
 
-flags.DEFINE_bool("do_train", True,
+flags.DEFINE_bool("do_train", False,#True, #False
                   "Whether to run training & evaluation on the dev set.")
 
 flags.DEFINE_bool(
@@ -117,7 +119,7 @@ flags.DEFINE_bool(
     "Whether to run the model in inference mode on the test set.")
 
 flags.DEFINE_bool(
-    "do_export", False,
+    "do_export", False,#False,
     "Whether to export the model to SavedModel format.")
 
 flags.DEFINE_integer("train_batch_size", 16, "Total batch size for training.")
@@ -127,7 +129,7 @@ flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
 flags.DEFINE_float("num_train_epochs", 4.0,
                    "Total number of training epochs to perform.")
 
-flags.DEFINE_integer("keep_checkpoint_max", 10,
+flags.DEFINE_integer("keep_checkpoint_max", 100,
                      "Maximum number of checkpoints to store.")
 
 flags.DEFINE_float(
@@ -153,7 +155,7 @@ flags.DEFINE_float("sentiment", 0,
 flags.DEFINE_float("correlation", 0,
                    "Regularization parameter for emotion correlations.")
 
-flags.DEFINE_integer("save_checkpoints_steps", 500,
+flags.DEFINE_integer("save_checkpoints_steps", 100,
                      "How often to save the model checkpoint.")
 
 flags.DEFINE_integer("save_summary_steps", 100,
@@ -165,7 +167,7 @@ flags.DEFINE_integer("iterations_per_loop", 1000,
 flags.DEFINE_integer("eval_steps", None,
                      "How many steps to take to go over the eval set.")
 
-flags.DEFINE_string("sentiment_file", "goemotions/data/sentiment_dict.json",
+flags.DEFINE_string("sentiment_file", os.path.join(os.path.dirname(os.path.dirname(__file__)), 'goemotions', 'data', 'sentiment_dict.json'),
                     "Dictionary of sentiment categories.")
 
 flags.DEFINE_string(
@@ -175,7 +177,7 @@ flags.DEFINE_string(
 )
 
 flags.DEFINE_bool(
-    "transfer_learning", False,
+    "transfer_learning", True,
     "Whether to perform transfer learning (i.e. replace output layer).")
 
 flags.DEFINE_bool("freeze_layers", False, "Whether to freeze BERT layers.")
@@ -732,7 +734,151 @@ def get_sentiment_groups(emotions):
     rels.append(grouped_labels)
   return rels
 
+def predict_from_input(df, CUSTOM_FLAGS):
+    os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 
+    # Load emotion categories
+    with open(CUSTOM_FLAGS.emotion_file, "r") as f:
+        all_emotions = f.read().splitlines()
+        if CUSTOM_FLAGS.add_neutral:
+            all_emotions = all_emotions + ["neutral"]
+        idx2emotion = {i: e for i, e in enumerate(all_emotions)}
+    num_labels = len(all_emotions)
+    print("%d labels" % num_labels)
+    print("Multilabel: %r" % CUSTOM_FLAGS.multilabel)
+
+    sentiment = CUSTOM_FLAGS.sentiment
+    correlation = CUSTOM_FLAGS.correlation
+
+    # Create emotion distance matrix
+    # If the regularization parameter is set to 0, don't load matrix.
+    print("Getting distance matrix...")
+    empty_rels = [[0] * num_labels] * num_labels
+    if sentiment == 0:
+        sent_rels = empty_rels
+    else:
+        sent_rels = get_sent_rels(all_emotions)
+    sent_groups = get_sentiment_groups(all_emotions)
+    print(sent_rels)
+    if correlation == 0:
+        corr_rels = empty_rels
+    else:
+        corr_rels = get_correlations(all_emotions)
+    print(corr_rels)
+
+    tf.logging.set_verbosity(tf.logging.INFO)
+
+    tokenization.validate_case_matches_checkpoint(CUSTOM_FLAGS.do_lower_case,
+                                                  CUSTOM_FLAGS.init_checkpoint)
+
+    if not CUSTOM_FLAGS.do_train and not CUSTOM_FLAGS.do_predict and not CUSTOM_FLAGS.do_export:
+        raise ValueError(
+            "At least one of `do_train`, `do_predict', or `do_export` must be True."
+        )
+
+    bert_config = modeling.BertConfig.from_json_file(CUSTOM_FLAGS.bert_config_file)
+
+    if CUSTOM_FLAGS.max_seq_length > bert_config.max_position_embeddings:
+        raise ValueError(
+            "Cannot use sequence length %d because the BERT model "
+            "was only trained up to sequence length %d" %
+            (CUSTOM_FLAGS.max_seq_length, bert_config.max_position_embeddings))
+
+    tf.gfile.MakeDirs(CUSTOM_FLAGS.output_dir)
+
+    processor = DataProcessor(num_labels, CUSTOM_FLAGS.data_dir)  # set up preprocessor
+
+    tokenizer = tokenization.FullTokenizer(
+        vocab_file=CUSTOM_FLAGS.vocab_file, do_lower_case=CUSTOM_FLAGS.do_lower_case)
+
+    run_config = tf_estimator.RunConfig(
+        model_dir=CUSTOM_FLAGS.output_dir,
+        save_summary_steps=CUSTOM_FLAGS.save_summary_steps,
+        save_checkpoints_steps=CUSTOM_FLAGS.save_checkpoints_steps,
+        keep_checkpoint_max=CUSTOM_FLAGS.keep_checkpoint_max)
+
+    train_examples = None
+    num_train_steps = None
+    num_warmup_steps = None
+    model_fn = model_fn_builder(
+        bert_config=bert_config,
+        num_labels=num_labels,
+        init_checkpoint=CUSTOM_FLAGS.init_checkpoint,
+        learning_rate=CUSTOM_FLAGS.learning_rate,
+        num_train_steps=num_train_steps,
+        num_warmup_steps=num_warmup_steps,
+        multilabel=CUSTOM_FLAGS.multilabel,
+        sent_rels=sent_rels,
+        sentiment=sentiment,
+        corr_rels=corr_rels,
+        correlation=correlation,
+        idx2emotion=idx2emotion,
+        sentiment_groups=sent_groups)
+    estimator = tf_estimator.Estimator(
+        model_fn=model_fn,
+        config=run_config,
+        params={"batch_size": CUSTOM_FLAGS.train_batch_size})
+
+    predict_examples = processor.get_examples("test", CUSTOM_FLAGS.test_fname)
+
+    num_actual_predict_examples = len(predict_examples)
+
+    predict_file = os.path.join(CUSTOM_FLAGS.output_dir,
+                                CUSTOM_FLAGS.test_fname + ".tf_record")
+    file_based_convert_examples_to_features(predict_examples,
+                                            CUSTOM_FLAGS.max_seq_length, tokenizer,
+                                            predict_file)
+
+    tf.logging.info("***** Running prediction*****")
+    tf.logging.info("  Num examples = %d (%d actual, %d padding)",
+                    len(predict_examples), num_actual_predict_examples,
+                    len(predict_examples) - num_actual_predict_examples)
+    tf.logging.info("  Batch size = %d", CUSTOM_FLAGS.train_batch_size)
+
+    predict_input_fn = file_based_input_fn_builder(
+        input_file=predict_file,
+        seq_length=CUSTOM_FLAGS.max_seq_length,
+        is_training=False,
+        drop_remainder=False,
+        num_labels=num_labels)
+
+    result = estimator.predict(input_fn=predict_input_fn)
+
+    output_predict_file = os.path.join(CUSTOM_FLAGS.output_dir,
+                                       CUSTOM_FLAGS.test_fname + ".predictions.tsv")
+    output_labels = os.path.join(CUSTOM_FLAGS.output_dir,
+                                 CUSTOM_FLAGS.test_fname + ".label_predictions.tsv")
+
+    with tf.gfile.GFile(output_predict_file, "w") as writer:
+        with tf.gfile.GFile(output_labels, "w") as writer2:
+            writer.write("\t".join(all_emotions) + "\n")
+            writer2.write("\t".join([
+                "text", "emotion_1", "prob_1", "emotion_2", "prob_2", "emotion_3",
+                "prob_3"
+            ]) + "\n")
+            tf.logging.info("***** Predict results *****")
+            num_written_lines = 0
+            for (i, prediction) in enumerate(result):
+                probabilities = prediction["probabilities"]
+                if i >= num_actual_predict_examples:
+                    break
+                output_line = "\t".join(
+                    str(class_probability)
+                    for class_probability in probabilities) + "\n"
+                sorted_idx = np.argsort(-probabilities)
+                top_3_emotion = [idx2emotion[idx] for idx in sorted_idx[:3]]
+                top_3_prob = [probabilities[idx] for idx in sorted_idx[:3]]
+                pred_line = []
+                for emotion, prob in zip(top_3_emotion, top_3_prob):
+                    if prob >= CUSTOM_FLAGS.pred_cutoff:
+                        pred_line.extend([emotion, "%.4f" % prob])
+                    else:
+                        pred_line.extend(["", ""])
+                writer.write(output_line)
+                writer2.write(predict_examples[i].text + "\t" + "\t".join(pred_line) +
+                              "\n")
+                num_written_lines += 1
+    assert num_written_lines == num_actual_predict_examples
 def main(_):
   os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 
@@ -848,6 +994,14 @@ def main(_):
       params={"batch_size": FLAGS.train_batch_size})
 
   if FLAGS.do_train:
+    best_copier = BestCheckpointCopier(
+          name='best',  # directory within model directory to copy checkpoints to
+          checkpoints_to_keep=10,  # number of checkpoints to keep
+          score_metric='eval_accuracy',  # metric to use to determine "best"
+          compare_fn=lambda x, y: x.score < y.score,
+          # comparison function used to determine "best" checkpoint (x is the current checkpoint; y is the previously copied checkpoint with the highest/worst score)
+          sort_key_fn=lambda x: x.score,
+          sort_reverse=False)
     train_file = os.path.join(FLAGS.output_dir, "train.tf_record")
     file_based_convert_examples_to_features(train_examples,
                                             FLAGS.max_seq_length, tokenizer,
@@ -879,10 +1033,10 @@ def main(_):
         input_fn=eval_input_fn,
         steps=FLAGS.eval_steps,
         start_delay_secs=0,
-        throttle_secs=1000)
+        throttle_secs=1000,
+        exporters=best_copier)
 
-    tf_estimator.train_and_evaluate(
-        estimator, train_spec=train_spec, eval_spec=eval_spec)
+    tf_estimator.train_and_evaluate(estimator, train_spec=train_spec, eval_spec=eval_spec)
 
   if FLAGS.calculate_metrics:
 

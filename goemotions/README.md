@@ -30,6 +30,8 @@ Refer to our [GoEmotions Model Card](goemotions_model_card.pdf) for recommended
 uses of models built with this data, as well as considerations and limitations
 relating to the GoEmotions data.
 
+## Bert model:
+uncased_L-12_H-256_A-4.zip
 ## Requirements
 
 See `requirements.txt`

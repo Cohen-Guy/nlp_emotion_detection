@@ -51,16 +51,16 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow import estimator as tf_estimator
-
+from best_checkpoint_copier import BestCheckpointCopier
 flags = tf.flags
 
 FLAGS = flags.FLAGS
 
 ## Required parameters
-flags.DEFINE_string("emotion_file", "data/emotions.txt",
+flags.DEFINE_string("emotion_file", os.path.join(os.path.dirname(__file__), 'data', 'emotions.txt'),
                     "File containing a list of emotions.")
 
-flags.DEFINE_integer("original_emotion_size", 29,
+flags.DEFINE_integer("original_emotion_size", 28,
                      "Number of emotion labels in our dataset.")
 
 flags.DEFINE_string(
@@ -69,15 +69,15 @@ flags.DEFINE_string(
     "for the task.")
 
 flags.DEFINE_string(
-    "bert_config_file", None,
+    "bert_config_file", os.path.join(os.path.dirname(__file__), 'bert', 'bert_config.json'),
     "The config json file corresponding to the pre-trained BERT model. "
     "This specifies the model architecture.")
 
-flags.DEFINE_string("vocab_file", None,
+flags.DEFINE_string("vocab_file", os.path.join(os.path.dirname(__file__), 'bert', 'vocab.txt'),
                     "The vocabulary file that the BERT model was trained on.")
 
 flags.DEFINE_string(
-    "output_dir", None,
+    "output_dir", os.path.join(os.path.dirname(__file__), 'output'),
     "The output directory where the model checkpoints will be written.")
 
 flags.DEFINE_string("test_fname", "test.tsv", "The name of the test file.")
@@ -85,7 +85,7 @@ flags.DEFINE_string("train_fname", "train.tsv",
                     "The name of the training file.")
 flags.DEFINE_string("dev_fname", "dev.tsv", "The name of the dev file.")
 
-flags.DEFINE_boolean("multilabel", False,
+flags.DEFINE_boolean("multilabel", True,
                      "Whether to perform multilabel classification.")
 
 ## Other parameters
@@ -124,7 +124,7 @@ flags.DEFINE_float("learning_rate", 2e-3, "The initial learning rate for Adam.")
 flags.DEFINE_float("num_train_epochs", 4.0,
                    "Total number of training epochs to perform.")
 
-flags.DEFINE_integer("keep_checkpoint_max", 10,
+flags.DEFINE_integer("keep_checkpoint_max", 100,
                      "Maximum number of checkpoints to store.")
 
 flags.DEFINE_float(
@@ -143,7 +143,7 @@ flags.DEFINE_string(
     "eval_thresholds", "0.0,0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,0.95,0.99",
     "Thresholds for evaluating precision, recall and F-1 scores.")
 
-flags.DEFINE_integer("save_checkpoints_steps", 500,
+flags.DEFINE_integer("save_checkpoints_steps", 100,
                      "How often to save the model checkpoint.")
 
 flags.DEFINE_integer("save_summary_steps", 100,
@@ -155,7 +155,7 @@ flags.DEFINE_integer("iterations_per_loop", 1000,
 flags.DEFINE_integer("eval_steps", None,
                      "How many steps to take to go over the eval set.")
 
-flags.DEFINE_bool("add_neutral", True,
+flags.DEFINE_bool("add_neutral", False,
                   "Whether to append `neutral` to the emotion categories.")
 
 
@@ -576,6 +576,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       else:
         metric_fn_single(per_example_loss, label_ids, logits)
 
+      # eval_dict['eval_accuracy'] = eval_dict['eval_accuracy'][0]
       output_spec = tf_estimator.EstimatorSpec(
           mode=mode,
           loss=total_loss,
@@ -592,6 +593,66 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
   return model_fn
 
 
+def predict(processor, tokenizer, num_labels, estimator, all_emotions, idx2emotion):
+    predict_examples = processor.get_examples("test", FLAGS.test_fname)
+    num_actual_predict_examples = len(predict_examples)
+
+    predict_file = os.path.join(FLAGS.output_dir,
+                                FLAGS.test_fname + ".tf_record")
+    file_based_convert_examples_to_features(predict_examples,
+                                            FLAGS.max_seq_length, tokenizer,
+                                            predict_file)
+
+    tf.logging.info("***** Running prediction*****")
+    tf.logging.info("  Num examples = %d (%d actual, %d padding)",
+                    len(predict_examples), num_actual_predict_examples,
+                    len(predict_examples) - num_actual_predict_examples)
+    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
+
+    predict_input_fn = file_based_input_fn_builder(
+        input_file=predict_file,
+        seq_length=FLAGS.max_seq_length,
+        is_training=False,
+        drop_remainder=False,
+        num_labels=num_labels)
+
+    result = estimator.predict(input_fn=predict_input_fn)
+
+    output_predict_file = os.path.join(FLAGS.output_dir,
+                                       FLAGS.test_fname + ".predictions.tsv")
+    output_labels = os.path.join(FLAGS.output_dir,
+                                 FLAGS.test_fname + ".label_predictions.tsv")
+
+    with tf.gfile.GFile(output_predict_file, "w") as writer:
+        with tf.gfile.GFile(output_labels, "w") as writer2:
+            writer.write("\t".join(all_emotions) + "\n")
+            writer2.write("\t".join([
+                "text", "emotion_1", "prob_1", "emotion_2", "prob_2", "emotion_3",
+                "prob_3"
+            ]) + "\n")
+            tf.logging.info("***** Predict results *****")
+            num_written_lines = 0
+            for (i, prediction) in enumerate(result):
+                probabilities = prediction["probabilities"]
+                if i >= num_actual_predict_examples:
+                    break
+                output_line = "\t".join(
+                    str(class_probability)
+                    for class_probability in probabilities) + "\n"
+                sorted_idx = np.argsort(-probabilities)
+                top_3_emotion = [idx2emotion[idx] for idx in sorted_idx[:3]]
+                top_3_prob = [probabilities[idx] for idx in sorted_idx[:3]]
+                pred_line = []
+                for emotion, prob in zip(top_3_emotion, top_3_prob):
+                    if prob >= FLAGS.pred_cutoff:
+                        pred_line.extend([emotion, "%.4f" % prob])
+                    else:
+                        pred_line.extend(["", ""])
+                writer.write(output_line)
+                writer2.write(predict_examples[i].text + "\t" + "\t".join(pred_line) +
+                              "\n")
+                num_written_lines += 1
+    assert num_written_lines == num_actual_predict_examples
 def main(_):
   os.environ["TF_CPP_MIN_LOG_LEVEL"] = "0"
 
@@ -679,6 +740,15 @@ def main(_):
       params={"batch_size": FLAGS.train_batch_size})
 
   if FLAGS.do_train:
+    best_copier = BestCheckpointCopier(
+          name='best',  # directory within model directory to copy checkpoints to
+          checkpoints_to_keep=10,  # number of checkpoints to keep
+          score_metric='accuracy_weighted',  # metric to use to determine "best"
+          compare_fn=lambda x, y: x.score < y.score,
+          # comparison function used to determine "best" checkpoint (x is the current checkpoint; y is the previously copied checkpoint with the highest/worst score)
+          sort_key_fn=lambda x: x.score,
+          sort_reverse=False)
+
     train_file = os.path.join(FLAGS.output_dir, "train.tf_record")
     file_based_convert_examples_to_features(train_examples,
                                             FLAGS.max_seq_length, tokenizer,
@@ -710,10 +780,12 @@ def main(_):
         input_fn=eval_input_fn,
         steps=FLAGS.eval_steps,
         start_delay_secs=0,
-        throttle_secs=1000)
+        throttle_secs=1000,
+        # exporters=best_copier
+    )
 
     tf_estimator.train_and_evaluate(
-        estimator, train_spec=train_spec, eval_spec=eval_spec)
+        estimator, train_spec=train_spec, eval_spec=eval_spec,)
 
   if FLAGS.calculate_metrics:
 
@@ -742,65 +814,7 @@ def main(_):
         writer.write("%s = %s\n" % (key, str(result[key])))
 
   if FLAGS.do_predict:
-    predict_examples = processor.get_examples("test", FLAGS.test_fname)
-    num_actual_predict_examples = len(predict_examples)
-
-    predict_file = os.path.join(FLAGS.output_dir,
-                                FLAGS.test_fname + ".tf_record")
-    file_based_convert_examples_to_features(predict_examples,
-                                            FLAGS.max_seq_length, tokenizer,
-                                            predict_file)
-
-    tf.logging.info("***** Running prediction*****")
-    tf.logging.info("  Num examples = %d (%d actual, %d padding)",
-                    len(predict_examples), num_actual_predict_examples,
-                    len(predict_examples) - num_actual_predict_examples)
-    tf.logging.info("  Batch size = %d", FLAGS.train_batch_size)
-
-    predict_input_fn = file_based_input_fn_builder(
-        input_file=predict_file,
-        seq_length=FLAGS.max_seq_length,
-        is_training=False,
-        drop_remainder=False,
-        num_labels=num_labels)
-
-    result = estimator.predict(input_fn=predict_input_fn)
-
-    output_predict_file = os.path.join(FLAGS.output_dir,
-                                       FLAGS.test_fname + ".predictions.tsv")
-    output_labels = os.path.join(FLAGS.output_dir,
-                                 FLAGS.test_fname + ".label_predictions.tsv")
-
-    with tf.gfile.GFile(output_predict_file, "w") as writer:
-      with tf.gfile.GFile(output_labels, "w") as writer2:
-        writer.write("\t".join(all_emotions) + "\n")
-        writer2.write("\t".join([
-            "text", "emotion_1", "prob_1", "emotion_2", "prob_2", "emotion_3",
-            "prob_3"
-        ]) + "\n")
-        tf.logging.info("***** Predict results *****")
-        num_written_lines = 0
-        for (i, prediction) in enumerate(result):
-          probabilities = prediction["probabilities"]
-          if i >= num_actual_predict_examples:
-            break
-          output_line = "\t".join(
-              str(class_probability)
-              for class_probability in probabilities) + "\n"
-          sorted_idx = np.argsort(-probabilities)
-          top_3_emotion = [idx2emotion[idx] for idx in sorted_idx[:3]]
-          top_3_prob = [probabilities[idx] for idx in sorted_idx[:3]]
-          pred_line = []
-          for emotion, prob in zip(top_3_emotion, top_3_prob):
-            if prob >= FLAGS.pred_cutoff:
-              pred_line.extend([emotion, "%.4f" % prob])
-            else:
-              pred_line.extend(["", ""])
-          writer.write(output_line)
-          writer2.write(predict_examples[i].text + "\t" + "\t".join(pred_line) +
-                        "\n")
-          num_written_lines += 1
-    assert num_written_lines == num_actual_predict_examples
+    predict(processor, tokenizer, num_labels, estimator, all_emotions, idx2emotion)
 
 
 if __name__ == "__main__":

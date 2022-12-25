@@ -91,7 +91,7 @@ def main(_):
 
   with open(FLAGS.emotion_file, "r") as f:
     all_emotions = f.read().splitlines()
-  all_emotions_neutral = all_emotions + ["neutral"]
+  all_emotions_neutral = all_emotions
   print("%d emotion Categories" % len(all_emotions))
 
   print("%d unique raters" % len(data["rater_id"].unique()))
