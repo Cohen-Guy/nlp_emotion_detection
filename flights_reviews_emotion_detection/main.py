@@ -6,8 +6,6 @@ from flights_reviews_emotion_detection.globalsContext import GlobalsContextClass
 import sweetviz as sv
 import dateutil
 import re
-import goemotions.er_bert_classifier as bert_classifier
-import tensorflow as tf
 class FlightsReviewsEmotionDetection:
 
     def __init__(self):
