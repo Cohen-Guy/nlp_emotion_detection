@@ -66,11 +66,11 @@ You can change the parameters from the json files in `config` directory.
 For taxonomy, choose `original`, `group` or `ekman`
 
 ```bash
-$ python3 run_goemotions.py --taxonomy {$TAXONOMY}
+$ python3 main_goemotions.py --taxonomy {$TAXONOMY}
 
-$ python3 run_goemotions.py --taxonomy original
-$ python3 run_goemotions.py --taxonomy group
-$ python3 run_goemotions.py --taxonomy ekman
+$ python3 main_goemotions.py --taxonomy original
+$ python3 main_goemotions.py --taxonomy group
+$ python3 main_goemotions.py --taxonomy ekman
 ```
 
 ## Results

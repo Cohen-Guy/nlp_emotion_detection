@@ -102,7 +102,7 @@ class GoEmotionsProcessor(object):
 
     def get_labels(self):
         labels = []
-        with open(os.path.join(self.args.data_dir, self.args.label_file), "r", encoding="utf-8") as f:
+        with open(os.path.join(os.path.dirname(__file__), self.args.data_dir, self.args.label_file), "r", encoding="utf-8") as f:
             for line in f:
                 labels.append(line.rstrip())
         return labels

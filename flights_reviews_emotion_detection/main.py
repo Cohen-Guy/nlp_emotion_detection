@@ -6,6 +6,7 @@ from flights_reviews_emotion_detection.globalsContext import GlobalsContextClass
 import sweetviz as sv
 import dateutil
 import re
+from GoEmotionsPytorch.main_goemotions import EmotionDetectionClassification
 class FlightsReviewsEmotionDetection:
 
     def __init__(self):
@@ -13,6 +14,7 @@ class FlightsReviewsEmotionDetection:
         self.debug_mode = True
         self.globals_context = GlobalsContextClass(time_str)
         self.data_io = DataIO(self.debug_mode)
+        self.emotionDetectionClassification = EmotionDetectionClassification()
         # self.define_flags()
 
     # def define_flags(self):
@@ -156,7 +158,7 @@ class FlightsReviewsEmotionDetection:
         eda_report.show_html(report_file_path)
 
     def predict(self, df):
-        df = bert_classifier.predict_from_input(df)
+        df = self.emotionDetectionClassification.predict(df)
         return df
 
     def ml_flow(self):

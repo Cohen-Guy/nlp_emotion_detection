@@ -18,13 +18,13 @@ from transformers import (
     get_linear_schedule_with_warmup
 )
 
-from model import BertForMultiLabelClassification
-from utils import (
+from GoEmotionsPytorch.model import BertForMultiLabelClassification
+from GoEmotionsPytorch.utils import (
     init_logger,
     set_seed,
     compute_metrics
 )
-from data_loader import (
+from GoEmotionsPytorch.data_loader import (
     load_and_cache_examples,
     GoEmotionsProcessor
 )
@@ -41,7 +41,7 @@ class EmotionDetectionClassification():
         self.cli_args = cli_parser.parse_args()
 
         config_filename = "{}.json".format(self.cli_args.taxonomy)
-        with open(os.path.join("config", config_filename)) as f:
+        with open(os.path.join(os.path.dirname(__file__), "config", config_filename)) as f:
             args = AttrDict(json.load(f))
         logger.info("Training/evaluation parameters {}".format(args))
 
@@ -75,7 +75,7 @@ class EmotionDetectionClassification():
     def train(self):
         # Read from config file and make args
         config_filename = "{}.json".format(self.cli_args.taxonomy)
-        with open(os.path.join("config", config_filename)) as f:
+        with open(os.path.join(os.path.dirname(__file__), "config", config_filename)) as f:
             args = AttrDict(json.load(f))
         logger.info("Training/evaluation parameters {}".format(args))
 
@@ -216,7 +216,7 @@ class EmotionDetectionClassification():
     def evaluate(self):
         mode = "test"
         config_filename = "{}.json".format(self.cli_args.taxonomy)
-        with open(os.path.join("config", config_filename)) as f:
+        with open(os.path.join(os.path.dirname(__file__), "config", config_filename)) as f:
             args = AttrDict(json.load(f))
         logger.info("Training/evaluation parameters {}".format(args))
 
@@ -247,7 +247,7 @@ class EmotionDetectionClassification():
         args.device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
         model.to(args.device)
         checkpoints = list(
-            os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + "/**/" + "pytorch_model.bin", recursive=True))
+            os.path.dirname(c) for c in sorted(glob.glob(os.path.join(os.path.dirname(__file__), args.output_dir) + "/**/" + "pytorch_model.bin", recursive=True))
         )
         if not args.eval_all_checkpoints:
             checkpoints = checkpoints[-1:]
@@ -325,10 +325,10 @@ class EmotionDetectionClassification():
                 f_w.write("{} = {}\n".format(key, str(results[key])))
 
 
-    def predict(self):
+    def predict(self, df):
         mode = "pred"
         config_filename = "{}.json".format(self.cli_args.taxonomy)
-        with open(os.path.join("config", config_filename)) as f:
+        with open(os.path.join(os.path.dirname(__file__), "config", config_filename)) as f:
             args = AttrDict(json.load(f))
         logger.info("Training/evaluation parameters {}".format(args))
 
@@ -358,17 +358,13 @@ class EmotionDetectionClassification():
         # GPU or CPU
         args.device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
         model.to(args.device)
-        preprocessed_df_file_path = os.path.join(os.path.dirname(__file__), 'data', 'preprocessed_df.csv')
-        df = pd.read_csv(preprocessed_df_file_path)
         pred_dataset, num_actual_predict_objects = load_and_cache_examples(args, tokenizer, mode="pred", df=df) if args.test_file else None
-        dev_dataset = None
-
         emotion_file_path = os.path.join(os.path.dirname(__file__), 'data', 'emotions.txt')
         with open(emotion_file_path, "r") as f:
             all_emotions = f.read().splitlines()
             idx2emotion = {i: e for i, e in enumerate(all_emotions)}
         checkpoints = list(
-            os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + "/**/" + "pytorch_model.bin", recursive=True))
+            os.path.dirname(c) for c in sorted(glob.glob(os.path.join(os.path.dirname(__file__), args.output_dir) + "/**/" + "pytorch_model.bin", recursive=True))
         )
         if not args.eval_all_checkpoints:
             checkpoints = checkpoints[-1:]
@@ -454,5 +450,5 @@ class EmotionDetectionClassification():
 
 if __name__ == '__main__':
     emotionDetectionClassification = EmotionDetectionClassification()
-    emotionDetectionClassification.evaluate()
+    emotionDetectionClassification.predict(pd.DataFrame())
 
