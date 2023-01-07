@@ -155,14 +155,17 @@ class GoEmotionsProcessor(object):
 
 def load_and_cache_examples(args, tokenizer, mode, df):
     processor = GoEmotionsProcessor(args)
-    logger.info("Creating features from dataset file at %s", args.data_dir)
     if mode == "train":
+        logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = processor.get_examples("train", None)
     elif mode == "dev":
+        logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = processor.get_examples("dev", None)
     elif mode == "test":
+        logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = processor.get_examples("test", None)
     elif mode == "pred":
+        logger.info("Creating features from dataset")
         examples = processor.get_examples("pred", df)
     else:
         raise ValueError("For mode, only train, dev, test is available")

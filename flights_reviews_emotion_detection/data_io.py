@@ -10,6 +10,7 @@ class DataIO(object):
         self.debug_mode = debug_mode
         self.excel_data_file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'capstone_airline_reviews3.xlsx')
         self.csv_data_file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'sampled_capstone_airline_reviews3.csv')
+        self.preprocessed_data_file_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'GoEmotionsPytorch', 'output', 'prediction_results.csv')
 
     def read_data(self):
         if self.debug_mode:
@@ -22,6 +23,10 @@ class DataIO(object):
             df = pd.DataFrame(data, columns=cols)
             df.dropna(subset=['airline', 'review_date', 'date_flown', 'customer_review'], inplace=True)
             df = df.reset_index(drop=True)
+        return df
+
+    def read_preorocessed_data(self):
+        df = pd.read_csv(self.preprocessed_data_file_path, header=0)
         return df
 
     def export_to_csv(self, df):

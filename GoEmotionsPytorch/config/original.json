@@ -15,7 +15,7 @@
   "do_eval": false,
   "do_predict": true,
   "max_seq_len": 275,
-  "num_train_epochs": 20,
+  "num_train_epochs": 100,
   "weight_decay": 0.0,
   "gradient_accumulation_steps": 1,
   "adam_epsilon": 1e-8,

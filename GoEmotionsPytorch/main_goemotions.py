@@ -3,7 +3,7 @@ import json
 import logging
 import os
 import glob
-
+import csv
 import pandas as pd
 import numpy as np
 import torch
@@ -324,6 +324,126 @@ class EmotionDetectionClassification():
             for key in sorted(results.keys()):
                 f_w.write("{} = {}\n".format(key, str(results[key])))
 
+    def evaluate_plot(self):
+        mode = "test"
+        config_filename = "{}.json".format(self.cli_args.taxonomy)
+        with open(os.path.join(os.path.dirname(__file__), "config", config_filename)) as f:
+            args = AttrDict(json.load(f))
+        logger.info("Training/evaluation parameters {}".format(args))
+
+        args.output_dir = os.path.join(args.ckpt_dir, args.output_dir)
+
+        init_logger()
+        set_seed(args)
+
+        processor = GoEmotionsProcessor(args)
+        label_list = processor.get_labels()
+
+        config = BertConfig.from_pretrained(
+            args.model_name_or_path,
+            num_labels=len(label_list),
+            finetuning_task=args.task,
+            id2label={str(i): label for i, label in enumerate(label_list)},
+            label2id={label: i for i, label in enumerate(label_list)}
+        )
+        tokenizer = BertTokenizer.from_pretrained(
+            args.tokenizer_name_or_path,
+        )
+        model = BertForMultiLabelClassification.from_pretrained(
+            args.model_name_or_path,
+            config=config
+        )
+
+        # GPU or CPU
+        args.device = "cuda" if torch.cuda.is_available() and not args.no_cuda else "cpu"
+        model.to(args.device)
+        checkpoints = list(
+            os.path.dirname(c) for c in sorted(glob.glob(os.path.join(os.path.dirname(__file__), args.output_dir) + "/**/" + "pytorch_model.bin", recursive=True))
+        )
+        if not args.eval_all_checkpoints:
+            checkpoints = checkpoints[-1:]
+        else:
+            logging.getLogger("transformers.configuration_utils").setLevel(logging.WARN)  # Reduce logging
+            logging.getLogger("transformers.modeling_utils").setLevel(logging.WARN)  # Reduce logging
+            logger.info("Evaluate the following checkpoints: %s", checkpoints)
+            result_dict = {
+                'checkpoint': None,
+                'loss': None,
+                'accuracy': None,
+            }
+            for checkpoint in checkpoints:
+                try:
+                    csv_file = open(os.path.join(os.path.dirname(__file__), 'output', "eval_results.csv"), 'a')
+                    writer = csv.DictWriter(csv_file, result_dict.keys())
+                    global_step = checkpoint.split("-")[-1]
+                    model = BertForMultiLabelClassification.from_pretrained(checkpoint)
+                    model.to(args.device)
+                    test_dataset, num_actual_predict_objects = load_and_cache_examples(args, tokenizer, mode="test", df=None) if args.test_file else None
+                    eval_sampler = SequentialSampler(test_dataset)
+                    eval_dataloader = DataLoader(test_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
+
+                    # Eval!
+                    if global_step != None:
+                        logger.info("***** Running evaluation on {} dataset ({} step) *****".format(mode, global_step))
+                    else:
+                        logger.info("***** Running evaluation on {} dataset *****".format(mode))
+                    logger.info("  Num examples = {}".format(len(test_dataset)))
+                    logger.info("  Eval Batch size = {}".format(args.eval_batch_size))
+                    eval_loss = 0.0
+                    nb_eval_steps = 0
+                    preds = None
+                    out_label_ids = None
+
+                    for batch in tqdm(eval_dataloader, desc="Evaluating"):
+                        model.eval()
+                        batch = tuple(t.to(args.device) for t in batch)
+
+                        with torch.no_grad():
+                            inputs = {
+                                "input_ids": batch[0],
+                                "attention_mask": batch[1],
+                                "token_type_ids": batch[2],
+                                "labels": batch[3]
+                            }
+                            outputs = model(**inputs)
+                            tmp_eval_loss, logits = outputs[:2]
+
+                            eval_loss += tmp_eval_loss.mean().item()
+                        nb_eval_steps += 1
+                        if preds is None:
+                            preds = 1 / (1 + np.exp(-logits.detach().cpu().numpy()))  # Sigmoid
+                            out_label_ids = inputs["labels"].detach().cpu().numpy()
+                        else:
+                            preds = np.append(preds, 1 / (1 + np.exp(-logits.detach().cpu().numpy())), axis=0)  # Sigmoid
+                            out_label_ids = np.append(out_label_ids, inputs["labels"].detach().cpu().numpy(), axis=0)
+
+                    eval_loss = eval_loss / nb_eval_steps
+                    preds[preds > args.threshold] = 1
+                    preds[preds <= args.threshold] = 0
+                    result = compute_metrics(out_label_ids, preds)
+                    result_dict = {
+                        'checkpoint': os.path.basename(checkpoint).split('-')[1],
+                        'loss': eval_loss,
+                        'accuracy':  result["accuracy"],
+                    }
+                    writer.writerow(result_dict)
+                    csv_file.close()
+                except Exception as e:
+                    pass
+        # with open(os.path.join(os.path.dirname(__file__), 'output', "eval_results.csv"), 'a') as f:
+        #     result_dict = {
+        #         'checkpoint': None,
+        #         'loss': None,
+        #         'accuracy': None,
+        #     }
+        #     writer = csv.DictWriter(f, result_dict.keys())
+        #     for index in range(10):
+        #         result_dict = {
+        #             'checkpoint': 'test_1',
+        #             'loss': 'test_2',
+        #             'accuracy': 'test_3',
+        #         }
+        #         writer.writerow(result_dict)
 
     def predict(self, df):
         mode = "pred"
@@ -379,19 +499,12 @@ class EmotionDetectionClassification():
         results = {}
         eval_sampler = SequentialSampler(pred_dataset)
         pred_dataloader = DataLoader(pred_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-        # Eval!
-        if global_step != None:
-            logger.info("***** Running evaluation on {} dataset ({} step) *****".format(mode, global_step))
-        else:
-            logger.info("***** Running evaluation on {} dataset *****".format(mode))
         logger.info("  Num examples = {}".format(len(pred_dataset)))
         logger.info("  Eval Batch size = {}".format(args.eval_batch_size))
         eval_loss = 0.0
         nb_eval_steps = 0
         preds = None
         out_label_ids = None
-
         for batch in tqdm(pred_dataloader, desc="Evaluating"):
             model.eval()
             batch = tuple(t.to(args.device) for t in batch)
@@ -450,5 +563,5 @@ class EmotionDetectionClassification():
 
 if __name__ == '__main__':
     emotionDetectionClassification = EmotionDetectionClassification()
-    emotionDetectionClassification.predict(pd.DataFrame())
+    emotionDetectionClassification.evaluate_plot()
 
